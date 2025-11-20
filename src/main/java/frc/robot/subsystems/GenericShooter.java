@@ -7,9 +7,9 @@ import frc.robot.Constants.*;
 
 
 public class GenericShooter extends SubsystemBase{
-    static TalonFX shooterMotor;
+    private final TalonFX shooterMotor;
     
-    GenericShooter(){
+    public GenericShooter(){
         shooterMotor = new TalonFX(DevicePorts.shooterMotorPort);
     }
     

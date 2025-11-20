@@ -11,7 +11,7 @@ class shootCommand extends Command {
     
     @Override
     public boolean isFinished() {
-        return time + ShooterConstants.shootTime >= System.currentTimeMillis();
+        return time + ShooterConstants.shootTime <= System.currentTimeMillis();
     }
 
     @Override
