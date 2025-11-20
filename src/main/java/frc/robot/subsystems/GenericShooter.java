@@ -1,11 +1,23 @@
 package frc.robot.subsystems;
 
+import com.ctre.phoenix6.hardware.TalonFX;
+
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
-import frc.robot.Constants.DevicePorts;
+import frc.robot.Constants.*; 
+
+
 public class GenericShooter extends SubsystemBase{
-    TalonFX shooterMotor;
+    static TalonFX shooterMotor;
+    
     GenericShooter(){
-        this.shooterMotor = new TalonFX() 
+        shooterMotor = new TalonFX(DevicePorts.shooterMotorPort);
     }
     
+    public void speedUp(){
+        shooterMotor.setVoltage(ShooterConstants.voltage);
+    } 
+
+    public void stop(){
+        shooterMotor.setVoltage(0);
+    }
 }

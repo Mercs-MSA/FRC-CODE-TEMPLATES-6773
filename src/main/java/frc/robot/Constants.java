@@ -4,6 +4,9 @@
 
 package frc.robot;
 
+import edu.wpi.first.math.util.Units;
+import edu.wpi.first.units.Unit;
+
 /**
  * The Constants class provides a convenient place for teams to hold robot-wide numerical or boolean
  * constants. This class should not be used for any other purpose. All constants should be declared
@@ -18,18 +21,23 @@ public final class Constants {
   }
   public static class DevicePorts {
     // Motor port configuration, change
-   int frontRightDrivePort = 0;
-   int frontLeftDrivePort = 0;
-   int backRightDrivePort = 0;
-   int backLeftDrivePort = 0;
-   int frontRightSteerPort = 0;
-   int frontLeftSteerPort = 0;
-   int backRightSteerPort = 0;
-   int backLeftSteerPort = 0;
+   public static int frontRightDrivePort = 0;
+   public static int frontLeftDrivePort = 0;
+   public static int backRightDrivePort = 0;
+   public static int backLeftDrivePort = 0;
+   public static int frontRightSteerPort = 0;
+   public static int frontLeftSteerPort = 0;
+   public static int backRightSteerPort = 0;
+   public static int backLeftSteerPort = 0;
    
-   int shooterMotorPort = 0;
-   int intakeMotorPort = 0;
+   public static  int shooterMotorPort = 0;
+   public static int intakeMotorPort = 0;
    
 
+  }
+
+  public static class ShooterConstants{
+    public static double voltage = 6; // Volts 
+    public static long shootTime = 1000; // MSEC
   }
 }
