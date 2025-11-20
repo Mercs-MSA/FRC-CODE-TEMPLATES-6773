@@ -20,4 +20,5 @@ public class GenericShooter extends SubsystemBase{
     public void stop(){
         shooterMotor.setVoltage(0);
     }
+
 }
