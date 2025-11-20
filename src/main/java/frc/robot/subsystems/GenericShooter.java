@@ -9,7 +9,6 @@ import frc.robot.Constants.*;
 
 public class GenericShooter extends SubsystemBase{
     private final TalonFX shooterMotor;
-    VelocityVoltage velocityControl = new VelocityVoltage(0).withSlot(0);
     
     public GenericShooter(){
         this.shooterMotor = new TalonFX(DevicePorts.shooterMotorPort);
@@ -17,11 +16,19 @@ public class GenericShooter extends SubsystemBase{
     }
     
     public void speedUp(){
-        shooterMotor.setControl(velocityControl.withVelocity(ShooterConstants.velocity));
+        VelocityVoltage request = new VelocityVoltage(ShooterConstants.velocity)
+                                        .withSlot(0);
+        shooterMotor.setControl(request);
+        
     } 
 
     public void stop(){
-        shooterMotor.setControl(velocityControl.withVelocity(0));
+        VelocityVoltage stopRequest = new VelocityVoltage(0).withSlot(0);
+        shooterMotor.setControl(stopRequest);
+    }
+
+    public double getVelocity(){
+        return shooterMotor.getVelocity().getValueAsDouble();
     }
 
 }
