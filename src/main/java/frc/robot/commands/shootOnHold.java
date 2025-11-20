@@ -13,7 +13,7 @@ class shootCommand extends Command {
         
         @Override
         public boolean isFinished() {
-            return !controller.getLeftBumperButtonPressed();
+            return false;
         }
     
         @Override
