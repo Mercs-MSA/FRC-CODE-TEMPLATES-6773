@@ -1,109 +1,138 @@
+// Copyright (c) 2021-2026 Littleton Robotics
+// http://github.com/Mechanical-Advantage
+//
+// Use of this source code is governed by a BSD
+// license that can be found in the LICENSE file
+// at the root directory of this project.
+
 package frc.robot.subsystems.drive;
 
-import static frc.robot.subsystems.drive.DriveConstants.*;
-
-import com.ctre.phoenix6.signals.NeutralModeValue;
-
+import com.ctre.phoenix6.configs.CANcoderConfiguration;
+import com.ctre.phoenix6.configs.TalonFXConfiguration;
+import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.system.plant.DCMotor;
 import edu.wpi.first.math.system.plant.LinearSystemId;
+import edu.wpi.first.math.util.Units;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.simulation.DCMotorSim;
 
+/**
+ * Physics sim implementation of module IO. The sim models are configured using a set of module
+ * constants from Phoenix. Simulation is always based on voltage control.
+ */
 public class ModuleIOSim implements ModuleIO {
-    private DCMotorSim driveMotor = 
+  // TunerConstants doesn't support separate sim constants, so they are declared
+  // locally
+  private static final double DRIVE_KP = 0.05;
+  private static final double DRIVE_KD = 0.0;
+  private static final double DRIVE_KS = 0.0;
+  private static final double DRIVE_KV_ROT =
+      0.91035; // Same units as TunerConstants: (volt * secs) / rotation
+  private static final double DRIVE_KV = 1.0 / Units.rotationsToRadians(1.0 / DRIVE_KV_ROT);
+  private static final double TURN_KP = 8.0;
+  private static final double TURN_KD = 0.0;
+  private static final DCMotor DRIVE_GEARBOX = DCMotor.getKrakenX60Foc(1);
+  private static final DCMotor TURN_GEARBOX = DCMotor.getKrakenX60Foc(1);
+
+  private final DCMotorSim driveSim;
+  private final DCMotorSim turnSim;
+
+  private boolean driveClosedLoop = false;
+  private boolean turnClosedLoop = false;
+  private PIDController driveController = new PIDController(DRIVE_KP, 0, DRIVE_KD);
+  private PIDController turnController = new PIDController(TURN_KP, 0, TURN_KD);
+  private double driveFFVolts = 0.0;
+  private double driveAppliedVolts = 0.0;
+  private double turnAppliedVolts = 0.0;
+
+  public ModuleIOSim(
+      SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration>
+          constants) {
+    // Create drive and turn sim models
+    driveSim =
         new DCMotorSim(
-            LinearSystemId.createDCMotorSystem(DCMotor.getKrakenX60Foc(1), 0.004, kDriveMotorGearing), 
-            DCMotor.getKrakenX60Foc(1), 0.0, 0.0);
-    private DCMotorSim azimuthMotor = 
+            LinearSystemId.createDCMotorSystem(
+                DRIVE_GEARBOX, constants.DriveInertia, constants.DriveMotorGearRatio),
+            DRIVE_GEARBOX);
+    turnSim =
         new DCMotorSim(
-            LinearSystemId.createDCMotorSystem(DCMotor.getKrakenX60Foc(1), 0.025, kAzimuthMotorGearing), 
-            DCMotor.getKrakenX60Foc(1), 0.0, 0.0);
+            LinearSystemId.createDCMotorSystem(
+                TURN_GEARBOX, constants.SteerInertia, constants.SteerMotorGearRatio),
+            TURN_GEARBOX);
 
-    private double driveAppliedVolts = 0.0;
-    private double azimuthAppliedVolts = 0.0;
+    // Enable wrapping for turn PID
+    turnController.enableContinuousInput(-Math.PI, Math.PI);
+  }
 
-    private PIDController drivePID = kModuleControllerConfigs.driveController();
-
-    private PIDController azimuthPID = kModuleControllerConfigs.azimuthController();
-
-    public ModuleIOSim() {
-        azimuthPID.enableContinuousInput(-Math.PI, Math.PI);
+  @Override
+  public void updateInputs(ModuleIOInputs inputs) {
+    // Run closed-loop control
+    if (driveClosedLoop) {
+      driveAppliedVolts =
+          driveFFVolts + driveController.calculate(driveSim.getAngularVelocityRadPerSec());
+    } else {
+      driveController.reset();
+    }
+    if (turnClosedLoop) {
+      turnAppliedVolts = turnController.calculate(turnSim.getAngularPositionRad());
+    } else {
+      turnController.reset();
     }
 
-    @Override
-    public void updateInputs(ModuleInputs inputs) {
-        driveMotor.update(0.02);
-        azimuthMotor.update(0.02);
+    // Update simulation state
+    driveSim.setInputVoltage(MathUtil.clamp(driveAppliedVolts, -12.0, 12.0));
+    turnSim.setInputVoltage(MathUtil.clamp(turnAppliedVolts, -12.0, 12.0));
+    driveSim.update(0.02);
+    turnSim.update(0.02);
 
-        inputs.drivePositionM = driveMotor.getAngularPositionRotations() * kWheelCircumferenceMeters;
-        inputs.driveVelocityMPS = (driveMotor.getAngularVelocityRPM() * kWheelCircumferenceMeters) / 60.0;
-        inputs.driveAppliedVolts = driveAppliedVolts;
-        inputs.driveStatorCurrentAmps = Math.abs(driveMotor.getCurrentDrawAmps());
-        inputs.driveTemperatureCelsius = 0.0;
-        inputs.azimuthAppliedVolts = azimuthAppliedVolts;
-        inputs.azimuthMotorVolts = azimuthAppliedVolts;
+    // Update drive inputs
+    inputs.driveConnected = true;
+    inputs.drivePositionRad = driveSim.getAngularPositionRad();
+    inputs.driveVelocityRadPerSec = driveSim.getAngularVelocityRadPerSec();
+    inputs.driveAppliedVolts = driveAppliedVolts;
+    inputs.driveCurrentAmps = Math.abs(driveSim.getCurrentDrawAmps());
 
-        inputs.azimuthAbsolutePosition = new Rotation2d(azimuthMotor.getAngularPositionRad());
-        inputs.azimuthPosition = new Rotation2d(azimuthMotor.getAngularPositionRad());
-        inputs.azimuthVelocity = Rotation2d.fromRadians(azimuthMotor.getAngularVelocityRadPerSec());
-        inputs.azimuthStatorCurrentAmps = Math.abs(azimuthMotor.getCurrentDrawAmps());
-        inputs.azimuthTemperatureCelsius = 0.0;
-        inputs.azimuthAppliedVolts = azimuthAppliedVolts;
-        inputs.azimuthMotorVolts = azimuthAppliedVolts;
-    }
+    // Update turn inputs
+    inputs.turnConnected = true;
+    inputs.turnEncoderConnected = true;
+    inputs.turnAbsolutePosition = new Rotation2d(turnSim.getAngularPositionRad());
+    inputs.turnPosition = new Rotation2d(turnSim.getAngularPositionRad());
+    inputs.turnVelocityRadPerSec = turnSim.getAngularVelocityRadPerSec();
+    inputs.turnAppliedVolts = turnAppliedVolts;
+    inputs.turnCurrentAmps = Math.abs(turnSim.getCurrentDrawAmps());
 
-    /////////// DRIVE MOTOR METHODS \\\\\\\\\\\
-    @Override
-    public void setDriveVolts(double volts) {
-        /* sets drive voltage between -kPeakVoltage and kPeakVoltage */
-        driveAppliedVolts = MathUtil.clamp(volts, -kPeakVoltage, kPeakVoltage);
-        driveMotor.setInputVoltage(driveAppliedVolts);
-    }
+    // Update odometry inputs (50Hz because high-frequency odometry in sim doesn't
+    // matter)
+    inputs.odometryTimestamps = new double[] {Timer.getFPGATimestamp()};
+    inputs.odometryDrivePositionsRad = new double[] {inputs.drivePositionRad};
+    inputs.odometryTurnPositions = new Rotation2d[] {inputs.turnPosition};
+  }
 
-    @Override
-    public void setDriveVelocity(double velocityMPS, double feedforward) {
-        /* Sets drive velocity using PID */
-        setDriveVolts(
-            drivePID.calculate(
-                driveMotor.getAngularVelocityRPM() * kWheelCircumferenceMeters / 60, 
-                velocityMPS) 
-            + feedforward);
-    }
+  @Override
+  public void setDriveOpenLoop(double output) {
+    driveClosedLoop = false;
+    driveAppliedVolts = output;
+  }
 
-    @Override
-    public void setDrivePID(double kP, double kI, double kD) {
-        /* Sets drive velocity PID */
-        drivePID.setPID(kP, kI, kD);
-    }
+  @Override
+  public void setTurnOpenLoop(double output) {
+    turnClosedLoop = false;
+    turnAppliedVolts = output;
+  }
 
-    @Override
-    public void resetAzimuthEncoder() {
-        /* No code is needed, sim doesn't need an implementation of this */
-    }
+  @Override
+  public void setDriveVelocity(double velocityRadPerSec) {
+    driveClosedLoop = true;
+    driveFFVolts = DRIVE_KS * Math.signum(velocityRadPerSec) + DRIVE_KV * velocityRadPerSec;
+    driveController.setSetpoint(velocityRadPerSec);
+  }
 
-    /////////// AZIMUTH MOTOR METHODS \\\\\\\\\\\
-    @Override
-    public void setAzimuthVolts(double volts) {
-        /* sets azimuth voltage between -kPeakVoltage and kPeakVoltage */
-        azimuthAppliedVolts = MathUtil.clamp(volts, -12.0, 12.0);
-        azimuthMotor.setInputVoltage(azimuthAppliedVolts);
-    }
-
-    @Override
-    public void setAzimuthPosition(Rotation2d position, double feedforward) {
-        /* Sets azimuth position using PID */
-        setAzimuthVolts(azimuthPID.calculate(azimuthMotor.getAngularPositionRad(), position.getRadians()) + feedforward);
-    }
-
-    @Override
-    public void setAzimuthPID(double kP, double kI, double kD) {
-        /* Sets azimuth position PID */
-        azimuthPID.setPID(kP, kI, kD);
-    }
-
-    public void setNeutralMode(NeutralModeValue neutralMode) {
-        // driveMotor.setNeutralMode(neutralMode);
-    }
+  @Override
+  public void setTurnPosition(Rotation2d rotation) {
+    turnClosedLoop = true;
+    turnController.setSetpoint(rotation.getRadians());
+  }
 }

@@ -1,33 +1,31 @@
+// Copyright (c) 2021-2026 Littleton Robotics
+// http://github.com/Mechanical-Advantage
+//
+// Use of this source code is governed by a BSD
+// license that can be found in the LICENSE file
+// at the root directory of this project.
+
 package frc.robot;
 
-import edu.wpi.first.apriltag.AprilTagFieldLayout;
-import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.wpilibj.RobotBase;
 
+/**
+ * This class defines the runtime mode used by AdvantageKit. The mode is always "real" when running
+ * on a roboRIO. Change the value of "simMode" to switch between "sim" (physics sim) and "replay"
+ * (log replay from a file).
+ */
 public final class Constants {
+  public static final Mode simMode = Mode.SIM;
+  public static final Mode currentMode = RobotBase.isReal() ? Mode.REAL : simMode;
 
-    // AdvantageKit modes
-    public static enum Mode {
-        REAL,
-        SIM,
-        REPLAY
-    }
+  public static enum Mode {
+    /** Running on a real robot. */
+    REAL,
 
-    public static final Mode kCurrentMode = 
-    // Mode.REPLAY;
-    RobotBase.isReal() ? Mode.REAL : Mode.SIM;
-    // Set Tuning to true during development, false during competition
-    public static final boolean kTuningMode = true;
+    /** Running a physics simulator. */
+    SIM,
 
-    // ROBOT SEPCIFIC
-    public static final String kCanbusName = "drivebase";
-
-    public static final AprilTagFieldLayout kFieldLayout = AprilTagFieldLayout.loadField(AprilTagFields.k2025Reefscape);
-
-    public static final double kFieldLengthMeters = kFieldLayout.getFieldLength();
-    public static final double kFieldWidthMeters = kFieldLayout.getFieldWidth();
-
-    public static final int kAprilTagCount = 22;
-
-    public static final double kLoopPeriod = 0.02;
+    /** Replaying from a log file. */
+    REPLAY
+  }
 }

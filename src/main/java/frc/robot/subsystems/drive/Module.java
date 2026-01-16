@@ -1,224 +1,141 @@
+// Copyright (c) 2021-2026 Littleton Robotics
+// http://github.com/Mechanical-Advantage
+//
+// Use of this source code is governed by a BSD
+// license that can be found in the LICENSE file
+// at the root directory of this project.
+
 package frc.robot.subsystems.drive;
 
-import edu.wpi.first.math.controller.SimpleMotorFeedforward;
+import com.ctre.phoenix6.configs.CANcoderConfiguration;
+import com.ctre.phoenix6.configs.TalonFXConfiguration;
+import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
-import frc.robot.utils.debugging.LoggedTunableNumber;
+import edu.wpi.first.math.util.Units;
+import edu.wpi.first.wpilibj.Alert;
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import org.littletonrobotics.junction.Logger;
 
-import com.ctre.phoenix6.signals.NeutralModeValue;
-
-import static frc.robot.subsystems.drive.DriveConstants.kModuleControllerConfigs;
-
 public class Module {
-    public static final LoggedTunableNumber driveP = new LoggedTunableNumber(
-        "Module/Drive/kP", kModuleControllerConfigs.driveController().getP());
-    public static final LoggedTunableNumber driveD = new LoggedTunableNumber(
-        "Module/Drive/kD", kModuleControllerConfigs.driveController().getD());
-    public static final LoggedTunableNumber driveS = new LoggedTunableNumber(
-        "Module/Drive/kS", kModuleControllerConfigs.driveFF().getKs());
-    public static final LoggedTunableNumber driveV = new LoggedTunableNumber(
-        "Module/Drive/kV", kModuleControllerConfigs.driveFF().getKv());
-    public static final LoggedTunableNumber driveA = new LoggedTunableNumber(
-        "Module/Drive/kA", kModuleControllerConfigs.driveFF().getKa());
+  private final ModuleIO io;
+  private final ModuleIOInputsAutoLogged inputs = new ModuleIOInputsAutoLogged();
+  private final int index;
+  private final SwerveModuleConstants<
+          TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration>
+      constants;
 
-    public static final LoggedTunableNumber turnP = new LoggedTunableNumber(
-        "Module/AzimuthP", kModuleControllerConfigs.azimuthController().getP());
-    public static final LoggedTunableNumber turnD = new LoggedTunableNumber(
-        "Module/AzimuthD", kModuleControllerConfigs.azimuthController().getD());
-    public static final LoggedTunableNumber turnS = new LoggedTunableNumber(
-        "Module/AzimuthS", kModuleControllerConfigs.azimuthFF().getKs());
+  private final Alert driveDisconnectedAlert;
+  private final Alert turnDisconnectedAlert;
+  private final Alert turnEncoderDisconnectedAlert;
+  private SwerveModulePosition[] odometryPositions = new SwerveModulePosition[] {};
 
-    private ModuleIO io;
-    private ModuleInputsAutoLogged inputs = new ModuleInputsAutoLogged();
+  public Module(
+      ModuleIO io,
+      int index,
+      SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration>
+          constants) {
+    this.io = io;
+    this.index = index;
+    this.constants = constants;
+    driveDisconnectedAlert =
+        new Alert(
+            "Disconnected drive motor on module " + Integer.toString(index) + ".",
+            AlertType.kError);
+    turnDisconnectedAlert =
+        new Alert(
+            "Disconnected turn motor on module " + Integer.toString(index) + ".", AlertType.kError);
+    turnEncoderDisconnectedAlert =
+        new Alert(
+            "Disconnected turn encoder on module " + Integer.toString(index) + ".",
+            AlertType.kError);
+  }
 
-    private final String kModuleName;
+  public void periodic() {
+    io.updateInputs(inputs);
+    Logger.processInputs("Drive/Module" + Integer.toString(index), inputs);
 
-    /* Drive Control */
-    private Double velocitySetpointMPS = null;
-    // driveA ACTS AS A FUDGE FACTOR, NOT ACTUAL CONSTANT FOR AMPERAGE TUNING
-    private Double amperageFeedforward = null;
-    private SimpleMotorFeedforward driveFF = DriveConstants.kModuleControllerConfigs.driveFF();
-
-    /* Azimuth Control */
-    private Rotation2d azimuthSetpointAngle = null;
-    private SimpleMotorFeedforward azimuthFF = DriveConstants.kModuleControllerConfigs.azimuthFF();
-
-    private SwerveModuleState currentState = new SwerveModuleState();
-    private SwerveModulePosition currentPosition = new SwerveModulePosition();
-
-    public Module(String key, ModuleIO io) {
-        this.io = io;
-        kModuleName = "Module/" + key;
+    // Calculate positions for odometry
+    int sampleCount = inputs.odometryTimestamps.length; // All signals are sampled together
+    odometryPositions = new SwerveModulePosition[sampleCount];
+    for (int i = 0; i < sampleCount; i++) {
+      double positionMeters = inputs.odometryDrivePositionsRad[i] * constants.WheelRadius;
+      Rotation2d angle = inputs.odometryTurnPositions[i];
+      odometryPositions[i] = new SwerveModulePosition(positionMeters, angle);
     }
 
-    public void periodic() {
-        io.updateInputs(inputs);
-        Logger.processInputs("Drive/"+kModuleName, inputs);
+    // Update alerts
+    driveDisconnectedAlert.set(!inputs.driveConnected);
+    turnDisconnectedAlert.set(!inputs.turnConnected);
+    turnEncoderDisconnectedAlert.set(!inputs.turnEncoderConnected);
+  }
 
-        currentState = new SwerveModuleState(inputs.driveVelocityMPS, inputs.azimuthPosition);
-        currentPosition = new SwerveModulePosition(inputs.drivePositionM, inputs.azimuthPosition);
+  /** Runs the module with the specified setpoint state. Mutates the state to optimize it. */
+  public void runSetpoint(SwerveModuleState state) {
+    // Optimize velocity setpoint
+    state.optimize(getAngle());
+    state.cosineScale(inputs.turnPosition);
 
-        // Runs drive PID
-        // if Amperage is null no feedforward is used
-        // Amperage is the FOC feedforward
-        if (velocitySetpointMPS != null) {
-            // Logger.recordOutput("Drive/"+kModuleName+"/velocitySepointMPS", velocitySetpointMPS);
-            if(amperageFeedforward != null) {
-                double ffOutput = driveFF.calculate(velocitySetpointMPS, amperageFeedforward);
+    // Apply setpoints
+    io.setDriveVelocity(state.speedMetersPerSecond / constants.WheelRadius);
+    io.setTurnPosition(state.angle);
+  }
 
-                Logger.recordOutput("Drive/"+kModuleName+"/AmperageFeedforward", amperageFeedforward);
-                Logger.recordOutput("Drive/"+kModuleName+"/ffOutput", ffOutput);
+  /** Runs the module with the specified output while controlling to zero degrees. */
+  public void runCharacterization(double output) {
+    io.setDriveOpenLoop(output);
+    io.setTurnPosition(Rotation2d.kZero);
+  }
 
-                io.setDriveVelocity(velocitySetpointMPS, ffOutput);
-            } else {
-                io.setDriveVelocity(velocitySetpointMPS, 0.0);
-            }
-        }
+  /** Disables all outputs to motors. */
+  public void stop() {
+    io.setDriveOpenLoop(0.0);
+    io.setTurnOpenLoop(0.0);
+  }
 
-        // Runs azimuth PID
-        if (azimuthSetpointAngle != null) {
-            double ffOutput = azimuthFF.getKs() * Math.signum(inputs.azimuthVelocity.getDegrees());
-            Logger.recordOutput("Drive/"+kModuleName+"/SimpleFeedforward", ffOutput);
-            io.setAzimuthPosition(azimuthSetpointAngle, ffOutput);
-        }
+  /** Returns the current turn angle of the module. */
+  public Rotation2d getAngle() {
+    return inputs.turnPosition;
+  }
 
-        // Updates PID values for drive and azimuth
-        LoggedTunableNumber.ifChanged(
-            hashCode(), () -> {
-                io.setDrivePID(driveP.get(), 0.0, driveD.get());
-            }, driveP, driveD);
+  /** Returns the current drive position of the module in meters. */
+  public double getPositionMeters() {
+    return inputs.drivePositionRad * constants.WheelRadius;
+  }
 
-        LoggedTunableNumber.ifChanged(
-            hashCode(), () -> {
-                driveFF = new SimpleMotorFeedforward(driveS.get(), driveV.get(), driveA.get());
-            }, driveS, driveV, driveA);
+  /** Returns the current drive velocity of the module in meters per second. */
+  public double getVelocityMetersPerSec() {
+    return inputs.driveVelocityRadPerSec * constants.WheelRadius;
+  }
 
-        LoggedTunableNumber.ifChanged(
-            hashCode(), () -> {
-                io.setAzimuthPID(turnP.get(), 0.0, turnD.get());
-            }, turnP, turnD);
+  /** Returns the module position (turn angle and drive position). */
+  public SwerveModulePosition getPosition() {
+    return new SwerveModulePosition(getPositionMeters(), getAngle());
+  }
 
-        LoggedTunableNumber.ifChanged(
-            hashCode(), () -> {
-                azimuthFF = new SimpleMotorFeedforward(turnS.get(), 0.0, 0.0);
-            }, turnS);
-    }
+  /** Returns the module state (turn angle and drive velocity). */
+  public SwerveModuleState getState() {
+    return new SwerveModuleState(getVelocityMetersPerSec(), getAngle());
+  }
 
-    /* Sets the desired setpoint of the module with FF. Disables the all FF include velocity FF
-     * @param state the desired velocity and rotation of the module
-    */
-    public SwerveModuleState setDesiredState(SwerveModuleState state) {
-        setDesiredStateWithAmpFF(state, null);
-        return getDesiredState();
-    }
+  /** Returns the module positions received this cycle. */
+  public SwerveModulePosition[] getOdometryPositions() {
+    return odometryPositions;
+  }
 
-    /* Sets the desired setpoint of the module with FF 
-     * @param state the desired velocity and rotation of the module
-     * @param ampFeedforward The amperage added to the PID from FF, also enables the PID
-    */
-    public SwerveModuleState setDesiredStateWithAmpFF(SwerveModuleState state, Double ampFeedforward) {
-        setAmpFeedforward(ampFeedforward);
-        setDesiredVelocity(state.speedMetersPerSecond);
-        setDesiredRotation(state.angle);
-        return getDesiredState();
-    }
+  /** Returns the timestamps of the samples received this cycle. */
+  public double[] getOdometryTimestamps() {
+    return inputs.odometryTimestamps;
+  }
 
-    /* Runs characterization of by setting motor drive voltage and rotates the module forward 
-     * With no closed loop
-     * @param inputVolts -12  to 12
-    */
-    public void runCharacterization(double inputVolts) {
-        runCharacterization(inputVolts, new Rotation2d());
-    }
+  /** Returns the module position in radians. */
+  public double getWheelRadiusCharacterizationPosition() {
+    return inputs.drivePositionRad;
+  }
 
-    /* Runs characterization of by setting motor drive voltage and the rotation the module at a specific rotation 
-     * With no closed loop
-     * @param inputVolts -12  to 12
-     * @param azimuthRotation Rotation at which the robot is running characterization voltage at
-    */
-    public void runCharacterization(double inputVolts, Rotation2d azimuthRotation) {
-        setDesiredRotation(azimuthRotation);
-        setDesiredVelocity(null);
-        setDriveVoltage(inputVolts);
-    }
-
-    /* Sets the velocity of the module 
-     * @param velocitySetpoint the velocity setpoint
-    */
-    public void setDesiredVelocity(Double velocitySetpoint) {
-        velocitySetpointMPS = velocitySetpoint;
-    }
-
-    /* Sets the amperage Feedforward 
-     * @pararm Rotation2d angleSetpoint
-    */
-    public void setAmpFeedforward(Double amperage) {
-        this.amperageFeedforward = amperage;
-    }
-
-    /* Sets azimuth rotation goal 
-     * @pararm Rotation2d angleSetpoint
-    */
-    public void setDesiredRotation(Rotation2d angleSetpoint) {
-        azimuthSetpointAngle = angleSetpoint;
-    }
-
-    /* Sets drive motor's voltage 
-     * @param driveVolts: -kPeakVoltage to PeakVoltage volts
-    */
-    public void setDriveVoltage(double driveVolts) {
-        io.setDriveVolts(driveVolts);
-    }
-
-    /* Sets drive motor's voltage 
-     * @param driveVolts: -kDriveFOCAmpLimit to kDriveFOCAmpLimit volts
-    */
-    public void setDriveAmperage(double amps) {
-        io.setDriveAmperage(amps);
-    }
-
-    /* Sets drive motor's voltage 
-     * @param azimuthVolts: -kPeakVoltage to PeakVoltage volts
-    */
-    public void setAzimuthVoltage(double azimuthVolts) {
-        io.setAzimuthVolts(azimuthVolts);
-    }
-
-    /* Stops modules by setting voltage to zero */
-    public void stop() {
-        setDriveVoltage(0.0);
-        setAzimuthVoltage(0.0);
-    }
-
-    /* Gets the setpoint state of the module(speed and rotation) */
-    public SwerveModuleState getDesiredState() {
-        return new SwerveModuleState(velocitySetpointMPS, azimuthSetpointAngle);
-    }
-
-    /* Gets the physical state of the module(speed and rotation) */
-    public SwerveModuleState getCurrentState() {
-        return currentState;
-    }
-
-    /* Gets the physical position of the module(position and rotation) */
-    public SwerveModulePosition getCurrentPosition() {
-        return currentPosition;
-    }
-
-    /* All logged hardware data in the module */
-    public ModuleInputsAutoLogged getInputs() {
-        return inputs;
-    }
-
-    /* Resets azimuth encoder from CANCoder */
-    public void resetAzimuthEncoder() {
-        io.resetAzimuthEncoder();
-    }
-
-    public void setNeutralMode(NeutralModeValue mode)
-    {
-        io.setNeutralMode(mode);
-    }
+  /** Returns the module velocity in rotations/sec (Phoenix native units). */
+  public double getFFCharacterizationVelocity() {
+    return Units.radiansToRotations(inputs.driveVelocityRadPerSec);
+  }
 }
